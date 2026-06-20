@@ -1,0 +1,3 @@
+@echo off
+echo Starting CrispASR in Developer Mode...
+call npm run dev

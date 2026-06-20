@@ -1,0 +1,43 @@
+{
+  "productName": "AutoSpeechWriter",
+  "appId": "com.autospeechwriter.app",
+  "directories": {
+    "output": "dist-app"
+  },
+  "icon": "build/icon.ico",
+  "files": [
+    "dist/**",
+    "dist-electron/**",
+    "build/**"
+  ],
+  "extraResources": [
+    {
+      "from": "crispasr-windows-x86_64-cpu",
+      "to": "crispasr-windows-x86_64-cpu",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "crispasr-windows-x86_64-vulkan",
+      "to": "crispasr-windows-x86_64-vulkan",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "models-cache",
+      "to": "models-cache",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "ffmpeg",
+      "to": "ffmpeg",
+      "filter": ["**/*"]
+    }
+  ],
+  "win": {
+    "target": "nsis",
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}
