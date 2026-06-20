@@ -8,5 +8,5 @@ The app launches voice recognition from a file or streaming from a microphone. T
 - To run the project without building, run: start_dev.bat
 - To build the project, run: build_exe.bat
 
-  The app uses CrispASR backends (confirmed to work with version 0.71) and the neural network model https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/blob/main/parakeet-tdt-0.6b-v3-q4_k.gguf
+  The app uses CrispASR backends (confirmed to work with version 0.72) https://github.com/CrispStrobe/CrispASR/releases and the neural network model https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/blob/main/parakeet-tdt-0.6b-v3-q4_k.gguf
   To work with other neural network models supported by CrispASR, you need to make changes to the neural network launch configuration settings and to the parser operating rules that receive the response from the backend.
