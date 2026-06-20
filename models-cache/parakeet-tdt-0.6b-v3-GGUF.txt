@@ -1,0 +1,1 @@
+https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/blob/main/parakeet-tdt-0.6b-v3-q4_k.gguf
