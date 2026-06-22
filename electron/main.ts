@@ -1,8 +1,9 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, globalShortcut, clipboard, dialog, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Tray, Menu, globalShortcut, clipboard, dialog, desktopCapturer, nativeImage, shell } from 'electron';
 import path from 'path';
 import { exec, spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import * as readline from 'readline';
+import * as net from 'net';
 import { t, detectLocale, Locale } from '../src/i18n';
 
 let win: BrowserWindow | null = null;
@@ -24,7 +25,9 @@ let settings = {
   mode: 'lowest-latency',
   autoStart: false,
   autoPaste: false,
-  locale: '' as string // interface language; detected from OS on first launch
+  locale: '' as string, // interface language; detected from OS on first launch
+  silenceMsLowest: 30,    // silence threshold for lowest-latency mode
+  silenceMsBest: 1150     // silence threshold for best-quality mode
 };
 
 // Current interface locale (falls back to English if unset).
@@ -115,6 +118,12 @@ function rebuildTrayMenu() {
       checked: settings.mode === 'best-quality',
       click: () => { settings.mode = 'best-quality'; saveSettings(); }
     },
+    {
+      label: t(L, 'tray.modeRecord'),
+      type: 'radio',
+      checked: settings.mode === 'record-then-recognize',
+      click: () => { settings.mode = 'record-then-recognize'; saveSettings(); }
+    },
     { type: 'separator' },
     {
       label: t(L, 'tray.autoPaste'),
@@ -193,11 +202,83 @@ function isResultLine(text: string): boolean {
   return true;
 }
 
+// When transcribing a video with subtitle mode ON, we remember the original
+// video path here so that after crispasr finishes we can auto-save the SRT
+// next to the video (same basename, .srt extension) — mirroring the behavior
+// already in place for audio files. Cleared on every new transcription start.
+let pendingVideoSrtAutoSave: string | null = null;
+
+// In record-then-recognize mode (mode 3), the renderer records via
+// MediaRecorder and sends the blob to main for transcription. Unlike mic
+// streaming mode, there's no real-time partial/final — text arrives as
+// file-text result lines AFTER recording stops. We accumulate the recognized
+// text here so that when the backend finishes, we can perform the same
+// clipboard + auto-paste behavior as streaming modes (if autoPaste is ON).
+// Set to true when transcribeRecording is called from the renderer's
+// record-then-recognize path.
+let pendingRecordThenRecognizePaste = false;
+let recordThenRecognizeText = '';
+
 let micLastUtteranceId = -1;
 
+// Current backend output mode. Set by startCrispBackendInstance and read by
+// processAsrLogLine to decide how to interpret each stdout line.
+//   'mic'       — streaming JSON (partial/final), for live microphone dictation
+//   'file-text' — plain text result lines, for file transcription
+//   'file-srt'  — SRT subtitle output, for file transcription with -osrt flag
+let currentBackendMode: 'mic' | 'file-text' | 'file-srt' = 'mic';
+
+// Accumulated SRT content for the current file-srt run. Sent to the UI as a
+// complete string after each new line so the user sees the subtitles build up.
+let srtContent = '';
+// Running index for SRT entries (1-based, as per SRT spec).
+let srtIndex = 0;
+
 // Emulate backend logic processing
-function processAsrLogLine(line: string, mode: 'mic' | 'file') {
+function processAsrLogLine(line: string, mode: 'mic' | 'file' | 'file-srt') {
   if (!win) return;
+
+  // ---- SRT subtitle mode ----
+  // crispasr with -osrt does NOT output standard SRT. It outputs lines like:
+  //   [00:00:01.670 --> 00:00:16.230]  Люди достаточно хорошо замечают...
+  // We parse this format and convert to standard SRT:
+  //   1
+  //   00:00:01,670 --> 00:00:16,230
+  //   Люди достаточно хорошо замечают...
+  // (note: period → comma in timestamps, per SRT spec)
+  if (mode === 'file-srt') {
+    const trimmed = line.trim();
+
+    // Match the crispasr subtitle line format.
+    //   ^\[  (  \d{2}:\d{2}:\d{2}\.\d{3} )  \s*-->\s*  (  \d{2}:\d{2}:\d{2}\.\d{3} )  \]\s*  (.*)$
+    const tsMatch = trimmed.match(
+      /^\[(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})\]\s*(.*)$/
+    );
+    if (tsMatch) {
+      const start = tsMatch[1].replace('.', ','); // SRT uses comma for ms
+      const end = tsMatch[2].replace('.', ',');
+      const text = tsMatch[3];
+      srtIndex++;
+      // Standard SRT: blank line between entries (not before the first).
+      if (srtIndex > 1) srtContent += '\n';
+      srtContent += `${srtIndex}\n${start} --> ${end}\n${text}\n`;
+      // Send the full SRT-so-far to the UI so the user sees subtitles build up.
+      win.webContents.send('transcription-update', srtContent, true);
+      // Also log a compact confirmation line.
+      win.webContents.send('log-update', `[SRT ${srtIndex}] ${text}\n`);
+      return;
+    }
+
+    // Non-subtitle line (info/debug) — log only, don't pollute SRT content.
+    // Note: we can't use isResultLine() here because it filters lines starting
+    // with "[" — which is exactly the subtitle format. The regex above handles
+    // subtitle detection; everything else is treated as info output.
+    if (trimmed.length > 0) {
+      win.webContents.send('log-update', trimmed + '\n');
+    }
+    return;
+  }
+
   const trimmed = line.trim();
   if (trimmed.length === 0) return;
 
@@ -256,26 +337,302 @@ function processAsrLogLine(line: string, mode: 'mic' | 'file') {
     // messages. crispasr echoes each finalized phrase both as a JSON
     // {"type":"final"} line AND as a plain-text line. If we appended the
     // plain-text echo here, every phrase would appear twice in the UI.
-    // (The Python GUI avoids this because _update_mic_display() rebuilds the
-    //  text widget from mic_finalized_text on every update, wiping duplicates.)
-    // Electron's frontend uses an append-only array, so we must skip here.
     if (mode !== 'mic') {
       win.webContents.send('transcription-update', trimmed, true);
+      // In record-then-recognize mode, accumulate text for auto-paste when
+      // the backend finishes (mirrors the streaming modes' behavior).
+      if (pendingRecordThenRecognizePaste) {
+        recordThenRecognizeText += trimmed + ' ';
+      }
     }
   } else {
     win.webContents.send('log-update', trimmed + '\n');
   }
 }
 
-function startCrispBackendInstance(mode: 'file' | 'mic', payload?: string) {
+// ---------------------------------------------------------------------------
+// Extract the audio track from a video file into a temporary WAV (16 kHz,
+// mono, PCM s16le — exactly what crispasr expects). Uses the bundled ffmpeg.
+// The callback receives the temp WAV path on success, or null on failure.
+// The temp file is created in the OS temp dir and deleted on app quit.
+// ---------------------------------------------------------------------------
+function extractAudioFromVideo(videoPath: string, basePath: string, cb: (wavPath: string | null) => void) {
+  const ffmpegBinPath = path.join(basePath, 'ffmpeg', 'bin');
+  const ffmpegRootPath = path.join(basePath, 'ffmpeg');
+  // Find ffmpeg.exe: prefer ffmpeg/bin, fall back to ffmpeg/ root.
+  const ffmpegExe = path.join(ffmpegBinPath, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+  const ffmpegAlt = path.join(ffmpegRootPath, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+  const ffmpeg = fs.existsSync(ffmpegExe) ? ffmpegExe : (fs.existsSync(ffmpegAlt) ? ffmpegAlt : 'ffmpeg');
+
+  // Temp WAV path — unique per extraction to avoid collisions.
+  const tmpDir = app.getPath('temp');
+  const tmpName = `asw-${Date.now()}-${Math.round(Math.random() * 1e6)}.wav`;
+  const tmpWav = path.join(tmpDir, tmpName);
+
+  const baseName = path.basename(videoPath);
+  win?.webContents.send('log-update', `[SYSTEM] Extracting audio from "${baseName}" → temp WAV...\n`);
+
+  const args = [
+    '-y',               // overwrite temp file if exists
+    '-i', videoPath,
+    '-vn',              // no video
+    '-ac', '1',         // mono
+    '-ar', '16000',     // 16 kHz — crispasr's expected sample rate
+    '-acodec', 'pcm_s16le', // 16-bit PCM codec
+    // NOTE: do NOT pass '-f s16le' — that forces RAW PCM without a WAV/RIFF
+    // header, and crispasr's miniaudio reader cannot parse it. With just the
+    // .wav extension + pcm_s16le codec, ffmpeg writes a proper WAV container.
+    tmpWav
+  ];
+
+  const env = buildUtf8Env([ffmpegBinPath, ffmpegRootPath]);
+
+  try {
+    const proc = spawn(ffmpeg, args, { env, windowsHide: true });
+    let stderrBuf = '';
+    proc.stderr?.on('data', (d: Buffer) => {
+      // ffmpeg writes progress to stderr — keep it for debugging but don't
+      // spam the UI log.
+      stderrBuf += d.toString();
+    });
+    proc.on('close', (code) => {
+      if (code === 0 && fs.existsSync(tmpWav)) {
+        win?.webContents.send('log-update', `[SYSTEM] Audio extracted: ${tmpWav}\n`);
+        // Register the temp file for cleanup on app quit.
+        tempFilesToDelete.push(tmpWav);
+        cb(tmpWav);
+      } else {
+        const tail = stderrBuf.split('\n').slice(-6).join('\n');
+        console.error('ffmpeg extraction failed:', code, tail);
+        win?.webContents.send('log-update', `[SYSTEM ERROR] ffmpeg audio extraction failed (code ${code}).\n${tail}\n`);
+        cb(null);
+      }
+    });
+    proc.on('error', (e) => {
+      console.error('ffmpeg spawn error:', e);
+      win?.webContents.send('log-update', `[SYSTEM ERROR] Cannot start ffmpeg: ${e.message}\n`);
+      cb(null);
+    });
+  } catch (e: any) {
+    console.error('ffmpeg exception:', e);
+    win?.webContents.send('log-update', `[SYSTEM ERROR] ffmpeg exception: ${e.message}\n`);
+    cb(null);
+  }
+}
+
+// Temp files (extracted WAVs) to delete when the app quits.
+const tempFilesToDelete: string[] = [];
+
+// Build a process environment with UTF-8 forced. This fixes issues with
+// Cyrillic (and other non-ASCII) characters in file paths and console output
+// on Windows, where the default codepage is often cp1251. By setting
+// PYTHONUTF8 / PYTHONIOENCODING / LANG / LC_ALL we ensure child processes
+// (crispasr, ffmpeg) interpret paths and output as UTF-8.
+function buildUtf8Env(extraPathEntries?: string[]) {
+  const env = Object.assign({}, process.env);
+  env.PYTHONUTF8 = '1';
+  env.PYTHONIOENCODING = 'utf-8';
+  env.LANG = 'en_US.UTF-8';
+  env.LC_ALL = 'en_US.UTF-8';
+  if (extraPathEntries && extraPathEntries.length > 0) {
+    env.PATH = extraPathEntries.join(path.delimiter) + path.delimiter + (env.PATH || '');
+  }
+  return env;
+}
+
+// ---------------------------------------------------------------------------
+// Fake-ffmpeg pipe streaming
+// ---------------------------------------------------------------------------
+// PROBLEM: crispasr's `-f -` (read from stdin) goes through miniaudio, which
+// can't open stdin on Windows. The `--mic` mode uses a DIFFERENT code path —
+// it spawns ffmpeg internally and reads raw PCM from ffmpeg's stdout. This
+// streaming path gives real-time partial/final JSON output.
+//
+// SOLUTION: Create a "fake ffmpeg" — a .cmd wrapper that the real ffmpeg
+// reads from our named pipe instead of a dshow device. We put this wrapper
+// FIRST in PATH. When crispasr spawns `ffmpeg` in --mic mode, it finds our
+// wrapper. The wrapper calls the real ffmpeg.exe with our named pipe as input.
+//
+// AUDIO FLOW:
+//   Renderer (AudioWorklet) → IPC → main → named pipe →
+//   fake ffmpeg.cmd → real ffmpeg.exe (passthrough) → stdout →
+//   crispasr (--mic streaming path) → JSON partial/final → UI
+//
+// This gives TRUE continuous streaming: mixed audio flows into crispasr as
+// it's formed, with full VAD context, no segment boundaries, no word cutoffs.
+// ---------------------------------------------------------------------------
+let pipeStreamingProcess: ChildProcess | null = null;
+let pipeServer: net.Server | null = null;
+let pipeConn: net.Socket | null = null;
+let pipeBuffer: Buffer[] = [];
+let streamingActive = false;
+let ffmpegWrapperDir: string | null = null;
+const STREAMING_SAMPLE_RATE = 16000;
+
+function startPipeStreaming(silenceMs: number) {
+  const basePath = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
+  const dirName = `crispasr-windows-x86_64-${settings.backend}`;
+  const binPath = path.join(basePath, dirName, 'crispasr.exe');
+  const modelPath = path.join(basePath, 'models-cache', 'parakeet-tdt-0.6b-v3-q4_k.gguf');
+
+  // Find the real ffmpeg
+  const ffmpegBinPath = path.join(basePath, 'ffmpeg', 'bin');
+  const ffmpegRootPath = path.join(basePath, 'ffmpeg');
+  const ffmpegExe = path.join(ffmpegBinPath, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+  const ffmpegAlt = path.join(ffmpegRootPath, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+  const realFfmpeg = fs.existsSync(ffmpegExe) ? ffmpegExe : (fs.existsSync(ffmpegAlt) ? ffmpegAlt : 'ffmpeg');
+
+  if (!fs.existsSync(binPath)) {
+    win?.webContents.send('log-update', `[SYSTEM ERROR] Backend binary not found: ${binPath}\n`);
+    win?.webContents.send('recording-state', false);
+    win?.webContents.send('backend-finished');
+    return;
+  }
+
+  // Create a unique named pipe path (Windows format: \\.\pipe\name)
+  const pipeName = `\\\\.\\pipe\\asw-audio-${Date.now()}`;
+
+  // Create a temp directory for the fake ffmpeg wrapper
+  ffmpegWrapperDir = path.join(app.getPath('temp'), `asw-ffmpeg-${Date.now()}-${Math.round(Math.random() * 1e6)}`);
+  fs.mkdirSync(ffmpegWrapperDir, { recursive: true });
+
+  // Write the ffmpeg.cmd wrapper. It IGNORES all arguments passed by crispasr
+  // (the dshow device args) and instead reads raw s16le 16kHz mono PCM from
+  // our named pipe, outputting the same format to stdout.
+  // -probesize 32 -analyzeduration 0: skip probing (raw PCM doesn't need it)
+  // -fflags +nobuffer: minimize buffering for low latency
+  const wrapperPath = path.join(ffmpegWrapperDir, 'ffmpeg.cmd');
+  const wrapperContent = `@echo off\r\n"${realFfmpeg}" -probesize 32 -analyzeduration 0 -fflags +nobuffer -f s16le -ar 16000 -ac 1 -i "${pipeName}" -f s16le -ar 16000 -ac 1 -`;
+  fs.writeFileSync(wrapperPath, wrapperContent, 'utf8');
+
+  // Create the named pipe server
+  pipeBuffer = [];
+  pipeConn = null;
+  pipeServer = net.createServer((conn) => {
+    pipeConn = conn;
+    // Flush any buffered PCM data that arrived before ffmpeg connected
+    for (const buf of pipeBuffer) {
+      conn.write(buf);
+    }
+    pipeBuffer = [];
+    conn.on('close', () => { pipeConn = null; });
+    conn.on('error', () => { pipeConn = null; });
+  });
+  pipeServer.on('error', (err) => {
+    win?.webContents.send('log-update', `[SYSTEM ERROR] Named pipe error: ${err.message}\n`);
+  });
+  pipeServer.listen(pipeName);
+
+  // Build crispasr args — use --mic mode (the streaming code path)
+  const args = [
+    '-m', modelPath,
+    '-t', settings.threads.toString(),
+    '-dev', settings.gpuId.toString()
+  ];
+  if (settings.language) args.push('-l', settings.language);
+  args.push('--mic');
+  args.push('--stream-json');
+  args.push('--vad');
+  args.push('--stream-final-on-silence-ms', silenceMs.toString());
+
+  currentBackendMode = 'mic';
+  micLastUtteranceId = -1;
+  interimTranscript = "";
+
+  // PATH: our wrapper dir MUST be first so crispasr finds ffmpeg.cmd
+  // before the real ffmpeg.exe. UTF-8 env fixes Cyrillic path issues.
+  const env = buildUtf8Env([ffmpegWrapperDir, ffmpegBinPath, ffmpegRootPath]);
+
+  win?.webContents.send('log-update', `[SYSTEM] Starting pipe streaming (fake-ffmpeg wrapper):\n[SYSTEM]   ${binPath}\n[SYSTEM]   Args: ${args.join(' ')}\n[SYSTEM]   Pipe: ${pipeName}\n[SYSTEM]   Wrapper: ${wrapperPath}\n`);
+
+  try {
+    pipeStreamingProcess = spawn(binPath, args, {
+      cwd: path.dirname(binPath),
+      env,
+      windowsHide: true
+    });
+  } catch (e: any) {
+    cleanupPipeStreaming();
+    win?.webContents.send('log-update', `[SYSTEM ERROR] Pipe streaming spawn failed: ${e.message}\n`);
+    win?.webContents.send('recording-state', false);
+    win?.webContents.send('backend-finished');
+    return;
+  }
+
+  streamingActive = true;
+
+  if (pipeStreamingProcess.stdout) {
+    const rl = readline.createInterface({ input: pipeStreamingProcess.stdout, crlfDelay: Infinity });
+    rl.on('line', (line: string) => {
+      processAsrLogLine(line, 'mic');
+    });
+  }
+  pipeStreamingProcess.stderr?.on('data', (d: Buffer) => {
+    const msg = d.toString().trim();
+    if (msg) win?.webContents.send('log-update', `[LOG] ${msg}\n`);
+  });
+
+  pipeStreamingProcess.on('close', (code) => {
+    win?.webContents.send('log-update', `[SYSTEM] Pipe streaming process exited (code ${code}).\n`);
+    pipeStreamingProcess = null;
+    streamingActive = false;
+    cleanupPipeStreaming();
+    tray?.setImage(IDLE_ICON);
+    win?.webContents.send('recording-state', false);
+    win?.webContents.send('backend-finished');
+  });
+  pipeStreamingProcess.on('error', (e) => {
+    win?.webContents.send('log-update', `[SYSTEM ERROR] Pipe streaming error: ${e.message}\n`);
+  });
+
+  tray?.setImage(REC_ICON);
+  win?.webContents.send('recording-state', true);
+}
+
+// Write a Float32 PCM chunk to the named pipe (→ fake ffmpeg → crispasr)
+function writePcmToPipe(chunk: Float32Array) {
+  if (!streamingActive || !chunk) return;
+  // Convert Float32 (-1..1) to Int16 s16le
+  const buf = Buffer.alloc(chunk.length * 2);
+  for (let i = 0; i < chunk.length; i++) {
+    const s = Math.max(-1, Math.min(1, chunk[i]));
+    buf.writeInt16LE(Math.round(s * 32767), i * 2);
+  }
+  if (pipeConn && !pipeConn.destroyed) {
+    pipeConn.write(buf);
+  } else {
+    // Buffer until ffmpeg connects to the named pipe
+    pipeBuffer.push(buf);
+  }
+}
+
+// Stop pipe streaming: close the pipe (EOF) → ffmpeg finishes → crispasr finishes
+function stopPipeStreaming() {
+  streamingActive = false;
+  if (pipeConn && !pipeConn.destroyed) {
+    pipeConn.end(); // Signal EOF to ffmpeg
+  }
+  pipeConn = null;
+}
+
+// Clean up pipe streaming resources (named pipe server + wrapper dir)
+function cleanupPipeStreaming() {
+  if (pipeConn) { try { pipeConn.destroy(); } catch (_) {} pipeConn = null; }
+  if (pipeServer) { try { pipeServer.close(); } catch (_) {} pipeServer = null; }
+  if (ffmpegWrapperDir) {
+    try { fs.rmSync(ffmpegWrapperDir, { recursive: true, force: true }); } catch (_) {}
+    ffmpegWrapperDir = null;
+  }
+  pipeBuffer = [];
+}
+
+function startCrispBackendInstance(mode: 'file' | 'mic', payload?: string, subtitleMode: boolean = false) {
   // Guard: if a backend process is already running, kill it synchronously and
   // clear the reference BEFORE spawning a new one. This prevents two parallel
   // crispasr.exe instances from grabbing the microphone simultaneously
   // (which was the root cause of duplicated final text).
   if (crispAsrProcess) {
     try {
-      // 'SIGKILL' forces immediate termination on Windows (via taskkill).
-      // A plain kill() maps to SIGTERM which the backend may not handle promptly.
       crispAsrProcess.kill('SIGKILL');
     } catch (e) {
       console.error('Failed to kill previous backend:', e);
@@ -290,6 +647,33 @@ function startCrispBackendInstance(mode: 'file' | 'mic', payload?: string) {
   const modelPath = path.join(basePath, 'models-cache', 'parakeet-tdt-0.6b-v3-q4_k.gguf');
   const ffmpegBinPath = path.join(basePath, 'ffmpeg', 'bin');
   const ffmpegRootPath = path.join(basePath, 'ffmpeg');
+
+  // Video files: extract the audio track to a temporary WAV first, because
+  // crispasr only accepts audio input. We use the bundled ffmpeg.
+  const videoExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv', '.m4v', '.mpg', '.mpeg', '.ts', '.3gp'];
+  if (mode === 'file' && payload) {
+    const ext = path.extname(payload).toLowerCase();
+    if (videoExts.includes(ext)) {
+      // If subtitle mode is ON, remember the original video path so we can
+      // auto-save the generated SRT next to it after transcription finishes.
+      pendingVideoSrtAutoSave = subtitleMode ? payload : null;
+      // Defer to the async extractor, which will call startCrispBackendInstance
+      // again with the extracted WAV path once extraction succeeds.
+      extractAudioFromVideo(payload, basePath, (wavPath) => {
+        if (wavPath) {
+          startCrispBackendInstance(mode, wavPath, subtitleMode);
+        } else {
+          // Extraction failed — error already logged + UI notified.
+          pendingVideoSrtAutoSave = null;
+          win?.webContents.send('backend-finished');
+        }
+      });
+      return;
+    } else {
+      // Non-video file: no auto-save pending.
+      pendingVideoSrtAutoSave = null;
+    }
+  }
 
   // Verify binary exists, fallback to simulating the logic if path missing in dev
   if (!fs.existsSync(binPath)) {
@@ -311,43 +695,51 @@ function startCrispBackendInstance(mode: 'file' | 'mic', payload?: string) {
     args.push('-l', settings.language);
   }
 
-  // Force json output so we can parse it
-  args.push('--stream-json');
-
-  // VAD is REQUIRED for phrase segmentation: without it the backend cannot
-  // detect phrase boundaries and will never emit {type:"final"} messages.
-  // The working Python GUI always passes --vad.
-  args.push('--vad');
-
-  // Silence threshold for finalizing a phrase (matching Python GUI).
-  // NOTE: --stream-final-mode is intentionally NOT used — the working Python
-  // version does not pass it, and it can alter how/whether finals are emitted.
-  if (settings.mode === 'lowest-latency') {
-    args.push('--stream-final-on-silence-ms', '40');
+  // --- Output format & mode-specific flags ---
+  if (mode === 'file' && subtitleMode) {
+    // SRT subtitle mode: use -osrt so crispasr emits SRT with timestamps.
+    // Do NOT use --stream-json (would conflict with -osrt).
+    // --vad segments speech into phrases.
+    // --chunk-seconds forces crispasr to split long audio into chunks for
+    // processing — this produces more, shorter SRT entries instead of one
+    // giant entry covering the whole video. 15s chunks balance granularity
+    // and model context (parakeet handles 15s well).
+    args.push('--vad');
+    args.push('--chunk-seconds', '15');
+    args.push('-osrt');
+    // Set the backend mode so processAsrLogLine knows to collect SRT content.
+    currentBackendMode = 'file-srt';
+    srtContent = ''; // reset for this run
+    srtIndex = 0;   // reset SRT entry counter
   } else {
-    args.push('--stream-final-on-silence-ms', '1250');
+    // Mic mode or plain-text file mode: use streaming JSON for parseable output.
+    args.push('--stream-json');
+    // VAD is REQUIRED for phrase segmentation: without it the backend cannot
+    // detect phrase boundaries and will never emit {type:"final"} messages.
+    args.push('--vad');
+    // Silence threshold for finalizing a phrase (mic only; file doesn't use it
+    // but passing it is harmless since the file isn't streamed).
+    if (mode === 'mic') {
+      const silenceMs = settings.mode === 'lowest-latency'
+        ? (settings.silenceMsLowest ?? 30)
+        : (settings.silenceMsBest ?? 1150);
+      args.push('--stream-final-on-silence-ms', silenceMs.toString());
+    }
+    currentBackendMode = mode === 'mic' ? 'mic' : 'file-text';
   }
 
   if (mode === 'mic') {
     // Use --mic (phrase-by-phrase with VAD) instead of --live (continuous).
-    // --mic mode emits {type:"final"} on each detected phrase boundary,
-    // which is exactly the gray-partial → white-final behaviour we need.
-    // --live only streams partials indefinitely and never finalizes.
     args.push('--mic');
+    micLastUtteranceId = -1;
   } else if (mode === 'file' && payload) {
     args.push('-f', payload);
-  }
-  
-  if (mode === 'mic') {
-    micLastUtteranceId = -1;
   }
 
   win?.webContents.send('log-update', `[SYSTEM] Starting backend: ${binPath} \n[SYSTEM] Args: ${args.join(' ')}\n`);
 
   try {
-    const env = Object.assign({}, process.env);
-    // Add ffmpeg to PATH depending on structure (usually ffmpeg/bin)
-    env.PATH = `${ffmpegBinPath}${path.delimiter}${ffmpegRootPath}${path.delimiter}${env.PATH}`;
+    const env = buildUtf8Env([ffmpegBinPath, ffmpegRootPath]);
 
     console.log(`===DIAG=== [Main PID:${process.pid}] about to spawn crispasr.exe (mode=${mode})`);
     crispAsrProcess = spawn(binPath, args, {
@@ -367,7 +759,11 @@ function startCrispBackendInstance(mode: 'file' | 'mic', payload?: string) {
         crlfDelay: Infinity
       });
       rl.on('line', (line: string) => {
-        processAsrLogLine(line, mode);
+        // Pass the resolved backend mode (which may be 'file-srt' when
+        // subtitleMode is on) so processAsrLogLine interprets output correctly.
+        const lineMode: 'mic' | 'file' | 'file-srt' =
+          currentBackendMode === 'file-srt' ? 'file-srt' : mode;
+        processAsrLogLine(line, lineMode);
       });
     }
     
@@ -385,6 +781,49 @@ function startCrispBackendInstance(mode: 'file' | 'mic', payload?: string) {
       // a stale pointer to a dead process.
       crispAsrProcess = null;
       win?.webContents.send('log-update', `\n[SYSTEM] Backend process exited with code ${code}\n`);
+      // Auto-save SRT next to the original video if this was a video
+      // transcription with subtitle mode ON. The SRT content was accumulated
+      // in `srtContent` by processAsrLogLine (file-srt mode).
+      if (pendingVideoSrtAutoSave && srtContent) {
+        try {
+          const videoExt = path.extname(pendingVideoSrtAutoSave);
+          const srtPath = pendingVideoSrtAutoSave.slice(0, -videoExt.length) + '.srt';
+          fs.writeFileSync(srtPath, srtContent, 'utf8');
+          win?.webContents.send('log-update', `[SYSTEM] Subtitles auto-saved: ${srtPath}\n`);
+        } catch (e: any) {
+          win?.webContents.send('log-update', `[SYSTEM ERROR] Failed to auto-save subtitles: ${e.message}\n`);
+        }
+        pendingVideoSrtAutoSave = null;
+      } else {
+        pendingVideoSrtAutoSave = null;
+      }
+      // Record-then-recognize auto-paste: if this transcription came from
+      // mode 3 (MediaRecorder → blob → file), and autoPaste is enabled, write
+      // the full recognized text to the clipboard and emulate Ctrl+V — the
+      // same behavior as streaming modes when recording stops.
+      if (pendingRecordThenRecognizePaste) {
+        const finalText = recordThenRecognizeText.trim();
+        if (finalText.length > 0) {
+          clipboard.writeText(finalText);
+          if (settings.autoPaste || uiAutoPaste) {
+            executePasteIntoActiveApp(finalText);
+            win?.webContents.send('show-toast', {
+              message: t(curLocale(), 'toast.inserted'),
+              preview: finalText.length > 60 ? finalText.slice(0, 60) + '…' : finalText
+            });
+          } else {
+            win?.webContents.send('show-toast', {
+              message: t(curLocale(), 'toast.copied'),
+              preview: finalText.length > 60 ? finalText.slice(0, 60) + '…' : finalText
+            });
+          }
+        }
+        pendingRecordThenRecognizePaste = false;
+        recordThenRecognizeText = '';
+      }
+      // Notify the UI that the backend finished (used by file mode to clear
+      // isProcessing and re-enable the editable transcript).
+      win?.webContents.send('backend-finished');
       // Stop recording UI state if it died
       if (isRecording) {
         stopMicrophone();
@@ -599,15 +1038,151 @@ ipcMain.handle('stop-mic', () => {
   stopMicrophone();
 });
 
-ipcMain.handle('transcribe-file', async () => {
+// --- Pipe streaming IPC (continuous PCM → crispasr stdin → real-time text) --
+ipcMain.handle('start-pipe-streaming', (_e, silenceMs: number) => {
+  startPipeStreaming(silenceMs);
+});
+
+ipcMain.on('send-pcm-pipe', (_e, chunk: Float32Array) => {
+  if (!streamingActive || !chunk) return;
+  writePcmToPipe(chunk);
+});
+
+ipcMain.handle('stop-pipe-streaming', () => {
+  stopPipeStreaming();
+});
+
+ipcMain.handle('transcribe-file', async (_e, subtitleMode: boolean = false) => {
   if (!win) return;
   const result = await dialog.showOpenDialog(win, {
     properties: ['openFile'],
-    filters: [{ name: 'Audio', extensions: ['wav', 'mp3', 'ogg', 'opus'] }]
+    filters: [
+      { name: 'Media (Audio & Video)', extensions: [
+        'wav', 'mp3', 'ogg', 'opus', 'm4a', 'flac', 'aac', 'wma', 'aiff',
+        'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'wmv', 'm4v', 'mpg', 'mpeg', 'ts', '3gp'
+      ] },
+      { name: 'All files', extensions: ['*'] }
+    ]
   });
   if (!result.canceled && result.filePaths.length > 0) {
     interimTranscript = "";
-    startCrispBackendInstance('file', result.filePaths[0]);
+    startCrispBackendInstance('file', result.filePaths[0], subtitleMode);
+  }
+});
+
+// Return available desktop/screen sources for system-audio loopback capture
+// via desktopCapturer. The renderer uses the source id with
+// getUserMedia({ audio: { chromeMediaSource: 'desktop' } }).
+ipcMain.handle('get-desktop-sources', async () => {
+  try {
+    const sources = await desktopCapturer.getSources({ types: ['screen'], fetchWindowIcons: false });
+    return sources.map(s => ({ id: s.id, name: s.name }));
+  } catch (e: any) {
+    console.error('desktopCapturer error:', e);
+    return [];
+  }
+});
+
+// Transcribe a recorded audio blob produced by the renderer's mixer
+// (MediaRecorder output, typically audio/webm;codecs=opus). We write the blob
+// to a temp file, convert it to WAV (16 kHz mono s16le) with the bundled
+// ffmpeg, then run crispasr on the WAV. Results stream back to the UI via the
+// usual transcription-update events (file-text mode).
+// The `autoPaste` flag indicates this came from record-then-recognize mode
+// and the recognized text should be auto-pasted (if settings.autoPaste or
+// uiAutoPaste is ON) when the backend finishes — mirroring streaming modes.
+ipcMain.handle('transcribe-recording', async (_e, buffer: ArrayBuffer, autoPaste: boolean = false) => {
+  pendingRecordThenRecognizePaste = autoPaste;
+  recordThenRecognizeText = '';
+  if (!buffer || buffer.byteLength === 0) {
+    win?.webContents.send('log-update', '[SYSTEM ERROR] Empty recording buffer.\n');
+    win?.webContents.send('backend-finished');
+    return { success: false, error: 'empty' };
+  }
+  const basePath = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
+  const tmpDir = app.getPath('temp');
+  const stamp = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+  const inPath = path.join(tmpDir, `asw-rec-${stamp}.webm`);
+  const wavPath = path.join(tmpDir, `asw-rec-${stamp}.wav`);
+
+  try {
+    fs.writeFileSync(inPath, Buffer.from(buffer));
+  } catch (e: any) {
+    win?.webContents.send('log-update', `[SYSTEM ERROR] Cannot write temp recording: ${e.message}\n`);
+    win?.webContents.send('backend-finished');
+    return { success: false, error: e.message };
+  }
+
+  // Convert webm → wav (16 kHz mono s16le) via bundled ffmpeg.
+  await new Promise<void>((resolve) => {
+    const ffmpegBinPath = path.join(basePath, 'ffmpeg', 'bin');
+    const ffmpegRootPath = path.join(basePath, 'ffmpeg');
+    const ffmpegExe = path.join(ffmpegBinPath, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+    const ffmpegAlt = path.join(ffmpegRootPath, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+    const ffmpeg = fs.existsSync(ffmpegExe) ? ffmpegExe : (fs.existsSync(ffmpegAlt) ? ffmpegAlt : 'ffmpeg');
+    const args = ['-y', '-i', inPath, '-vn', '-ac', '1', '-ar', '16000', '-acodec', 'pcm_s16le', wavPath];
+    const env = buildUtf8Env([ffmpegBinPath, ffmpegRootPath]);
+    win?.webContents.send('log-update', `[SYSTEM] Converting recording → WAV...\n`);
+    const proc = spawn(ffmpeg, args, { env, windowsHide: true });
+    let stderrBuf = '';
+    proc.stderr?.on('data', (d: Buffer) => { stderrBuf += d.toString(); });
+    proc.on('close', (code) => {
+      if (code === 0 && fs.existsSync(wavPath)) {
+        tempFilesToDelete.push(inPath, wavPath);
+        resolve();
+      } else {
+        const tail = stderrBuf.split('\n').slice(-6).join('\n');
+        win?.webContents.send('log-update', `[SYSTEM ERROR] ffmpeg recording conversion failed (code ${code}).\n${tail}\n`);
+        try { fs.unlinkSync(inPath); } catch (_) {}
+        resolve();
+      }
+    });
+    proc.on('error', (e) => {
+      win?.webContents.send('log-update', `[SYSTEM ERROR] ffmpeg spawn: ${e.message}\n`);
+      resolve();
+    });
+  });
+
+  if (!fs.existsSync(wavPath)) {
+    win?.webContents.send('backend-finished');
+    return { success: false, error: 'conversion failed' };
+  }
+
+  // Run crispasr on the WAV (file-text mode → progressive transcription-update).
+  startCrispBackendInstance('file', wavPath, false);
+  return { success: true };
+});
+
+// Save SRT subtitles. The save dialog allows the user to either type a new
+// filename OR click an existing video file — in the latter case the .srt is
+// saved next to the video with the same basename.
+ipcMain.handle('save-srt', async (_e, srtContent: string) => {
+  if (!win) return { success: false, error: 'no window' };
+  const result = await dialog.showSaveDialog(win, {
+    title: 'Save subtitles',
+    defaultPath: 'subtitles.srt',
+    filters: [
+      { name: 'Subtitles', extensions: ['srt'] },
+      { name: 'Video files', extensions: ['mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'wmv', 'm4v', 'mpg', 'mpeg', 'ts', '3gp'] }
+    ]
+  });
+  if (result.canceled || !result.filePath) return { success: false };
+
+  let savePath = result.filePath;
+  const ext = path.extname(savePath).toLowerCase();
+  const videoExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv', '.m4v', '.mpg', '.mpeg', '.ts', '.3gp'];
+  if (videoExts.includes(ext)) {
+    // User clicked a video file → replace its extension with .srt
+    savePath = savePath.slice(0, -ext.length) + '.srt';
+  } else if (ext !== '.srt') {
+    savePath = savePath + '.srt';
+  }
+
+  try {
+    fs.writeFileSync(savePath, srtContent, 'utf8');
+    return { success: true, path: savePath };
+  } catch (e: any) {
+    return { success: false, error: e.message };
   }
 });
 
@@ -622,4 +1197,13 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   if (crispAsrProcess) crispAsrProcess.kill();
+  if (pipeStreamingProcess) {
+    stopPipeStreaming();
+    try { pipeStreamingProcess.kill('SIGKILL'); } catch (_) {}
+  }
+  cleanupPipeStreaming();
+  // Clean up temp WAV files extracted from videos.
+  for (const f of tempFilesToDelete) {
+    try { fs.unlinkSync(f); } catch (_) { /* ignore */ }
+  }
 });
