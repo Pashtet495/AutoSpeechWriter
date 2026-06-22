@@ -6,9 +6,15 @@ contextBridge.exposeInMainWorld('electron', {
   setAutoPaste: (value: boolean) => ipcRenderer.invoke('set-auto-paste', value),
   setUiAutoPaste: (value: boolean) => ipcRenderer.invoke('set-ui-auto-paste', value),
   clearTranscript: () => ipcRenderer.invoke('clear-transcript'),
-  transcribeFile: () => ipcRenderer.invoke('transcribe-file'),
+  transcribeFile: (subtitleMode: boolean = false) => ipcRenderer.invoke('transcribe-file', subtitleMode),
+  saveSrt: (srtContent: string) => ipcRenderer.invoke('save-srt', srtContent),
+  getDesktopSources: () => ipcRenderer.invoke('get-desktop-sources'),
+  transcribeRecording: (buffer: ArrayBuffer, autoPaste: boolean = false) => ipcRenderer.invoke('transcribe-recording', buffer, autoPaste),
   startMic: () => ipcRenderer.invoke('start-mic'),
   stopMic: () => ipcRenderer.invoke('stop-mic'),
+  startPipeStreaming: (silenceMs: number) => ipcRenderer.invoke('start-pipe-streaming', silenceMs),
+  sendPcmPipe: (chunk: Float32Array) => ipcRenderer.send('send-pcm-pipe', chunk),
+  stopPipeStreaming: () => ipcRenderer.invoke('stop-pipe-streaming'),
   closeApp: () => ipcRenderer.send('close-app'),
   minimizeApp: () => ipcRenderer.send('minimize-app'),
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
@@ -47,6 +53,11 @@ contextBridge.exposeInMainWorld('electron', {
     const handler = (_event: Electron.IpcRendererEvent, data: { message: string; preview: string }) => callback(data);
     ipcRenderer.on('show-toast', handler);
     return () => ipcRenderer.off('show-toast', handler);
+  },
+  onBackendFinished: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('backend-finished', handler);
+    return () => ipcRenderer.off('backend-finished', handler);
   },
   onSettingsUpdated: (callback: (settings: any) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, settings: any) => callback(settings);
