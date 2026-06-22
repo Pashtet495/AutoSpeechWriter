@@ -57,6 +57,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'app.name': 'AutoSpeechWriter',
     'header.title': 'AutoSpeechWriter',
     'status.ready': 'Ready',
+    'status.processing': 'Processing…',
 
     'transcript.placeholder': 'Recognized text will appear here...',
     'transcript.silence': 'Silence detected',
@@ -66,14 +67,17 @@ export const translations: Record<Locale, Record<string, string>> = {
     'btn.stop': 'Stop & Insert',
     'btn.clear': 'Clear transcript',
     'btn.copy': 'Copy all text',
+    'btn.save': 'Save',
     'btn.autoPaste': 'Auto-paste',
     'btn.logs': 'Toggle logs',
     'btn.settings': 'Settings',
+    'subtitle.checkbox': 'Subtitles (SRT)',
 
     'autopaste.on.tip': 'Auto-paste ON: each phrase is pasted into the active app at the cursor',
     'autopaste.off.tip': 'Auto-paste OFF: only copy to clipboard on stop',
 
     'toast.copied': 'Copied to clipboard',
+    'toast.saved': 'Saved',
     'toast.inserted': 'Dictation finished — text inserted',
 
     'logs.title': 'System Console',
@@ -81,6 +85,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     'settings.title': 'Settings',
     'settings.backend': 'Backend',
     'settings.inputDevice': 'Input Device',
+    'settings.configureDevices': 'Configure Devices...',
+    'settings.noDevicesSelected': 'Default microphone (no mixer)',
     'settings.cpuThreads': 'CPU Threads',
     'settings.gpuId': 'GPU ID',
     'settings.language': 'Interface Language',
@@ -90,6 +96,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'settings.performanceMode': 'Performance Mode',
     'settings.modeLowest': 'Lowest Latency',
     'settings.modeBest': 'Best Correction / Quality',
+    'settings.modeRecordThenRecognize': 'Record before recognition',
     'settings.autoStart': 'Run application at system startup',
     'settings.autoPasteHotkey': 'Auto-paste when starting recognition via hotkey',
     'settings.cancel': 'Cancel',
@@ -97,6 +104,18 @@ export const translations: Record<Locale, Record<string, string>> = {
 
     'mic.default': 'System Default',
     'mic.index': 'Microphone (Index {n})',
+
+    'audio.configure': 'Configure audio devices…',
+    'audio.title': 'Audio Devices',
+    'audio.hint': 'Select one or more sources. Selected signals are mixed together. Tap a microphone to see its level meter react.',
+    'audio.systemAudio': 'System Audio (loopback)',
+    'audio.volume': 'Volume',
+    'audio.level': 'Level',
+    'audio.noDevices': 'No input devices found.',
+    'audio.apply': 'Apply',
+    'audio.mixerActive': 'Mixer mode: multiple sources will be mixed and transcribed after recording stops.',
+    'audio.recording': 'Recording…',
+    'audio.recordingHint': 'Mixing selected sources. Text will appear after you stop.',
 
     'help.autopaste.title': 'Auto-paste',
     'help.autopaste.body': 'The recognized text is automatically pasted via the clipboard to the location of the cursor. How to use: 1) Place the cursor in the application where you want to enter text. 2) Activate recognition by pressing the hotkey. 3) The recognized text will be pasted at the cursor position. 4) Wait for recognition to finish. 5) Press the hotkey again to stop recognition.',
@@ -114,15 +133,27 @@ export const translations: Record<Locale, Record<string, string>> = {
     'tray.open': 'Open AutoSpeechWriter',
     'tray.modeLowest': 'Performance Mode: Lowest Latency',
     'tray.modeBest': 'Performance Mode: Best Quality',
+    'tray.modeRecord': 'Performance Mode: Record before recognition',
     'tray.autoPaste': 'Auto-paste (paste recognized text into the active application as it is recognized)',
     'tray.autoStart': 'Run at startup',
-    'tray.exit': 'Exit'
+    'tray.exit': 'Exit',
+
+    'devices.title': 'Input Devices',
+    'devices.refresh': 'Refresh device list',
+    'devices.hint': 'Select one or more devices to mix. Tap a microphone to see which one picks up signal. Adjust gain per device.',
+    'devices.selectedCount': '{n} source(s) selected',
+    'devices.systemSound': 'System Sound',
+    'devices.systemSoundDesc': 'Audio playing through speakers/headphones',
+    'devices.physicalDevices': 'Microphones',
+    'devices.defaultDevice': 'System default',
+    'devices.none': 'No input devices found. Click refresh or check permissions.'
   },
 
   ru: {
     'app.name': 'AutoSpeechWriter',
     'header.title': 'AutoSpeechWriter',
     'status.ready': 'Готов',
+    'status.processing': 'Обработка…',
 
     'transcript.placeholder': 'Здесь появится распознанный текст...',
     'transcript.silence': 'Обнаружена тишина',
@@ -132,14 +163,17 @@ export const translations: Record<Locale, Record<string, string>> = {
     'btn.stop': 'Стоп и вставка',
     'btn.clear': 'Очистить текст',
     'btn.copy': 'Копировать весь текст',
+    'btn.save': 'Сохранить',
     'btn.autoPaste': 'Автовставка',
     'btn.logs': 'Показать логи',
     'btn.settings': 'Настройки',
+    'subtitle.checkbox': 'Субтитры (SRT)',
 
     'autopaste.on.tip': 'Автовставка ВКЛ: каждая фраза вставляется в активное приложение в позиции курсора',
     'autopaste.off.tip': 'Автовставка ВЫКЛ: только копирование в буфер при остановке',
 
     'toast.copied': 'Текст скопирован в буфер обмена',
+    'toast.saved': 'Сохранено',
     'toast.inserted': 'Диктовка завершена — текст вставлен',
 
     'logs.title': 'Системная консоль',
@@ -147,6 +181,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     'settings.title': 'Настройки',
     'settings.backend': 'Бэкенд',
     'settings.inputDevice': 'Устройство ввода',
+    'settings.configureDevices': 'Настроить устройства...',
+    'settings.noDevicesSelected': 'Микрофон по умолчанию (без микшера)',
     'settings.cpuThreads': 'Потоки CPU',
     'settings.gpuId': 'ID GPU',
     'settings.language': 'Язык интерфейса',
@@ -156,6 +192,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'settings.performanceMode': 'Режим производительности',
     'settings.modeLowest': 'Минимальная задержка',
     'settings.modeBest': 'Лучшее распознавание / коррекция',
+    'settings.modeRecordThenRecognize': 'Запись перед распознаванием',
     'settings.autoStart': 'Запускать приложение при старте системы',
     'settings.autoPasteHotkey': 'Автовставка при запуске распознавания горячей клавишей',
     'settings.cancel': 'Отмена',
@@ -163,6 +200,18 @@ export const translations: Record<Locale, Record<string, string>> = {
 
     'mic.default': 'Системное умолчание',
     'mic.index': 'Микрофон (Индекс {n})',
+
+    'audio.configure': 'Настроить аудиоустройства…',
+    'audio.title': 'Аудиоустройства',
+    'audio.hint': 'Выберите один или несколько источников. Выбранные сигналы смешиваются. Постучите по микрофону, чтобы увидеть реакцию индикатора уровня.',
+    'audio.systemAudio': 'Системный звук (перехват)',
+    'audio.volume': 'Громкость',
+    'audio.level': 'Уровень',
+    'audio.noDevices': 'Устройства ввода не найдены.',
+    'audio.apply': 'Применить',
+    'audio.mixerActive': 'Режим микшера: несколько источников будут смешаны и распознаны после остановки записи.',
+    'audio.recording': 'Запись…',
+    'audio.recordingHint': 'Смешивание выбранных источников. Текст появится после остановки.',
 
     'help.autopaste.title': 'Автовставка',
     'help.autopaste.body': 'Сформированный распознанный текст через буфер обмена автоматически вставляется в место, куда установлен курсор. Инструкция по использованию: 1) установите курсор в приложении в котором нужно ввести текст. 2) Активируйте распознавание звука нажатием горячей клавиши. 3) Распознанный текст будет вставляться в место установки курсора. 4) Дождитесь окончание распознавания. 5) Повторно нажмите горячую клавишу для завершения распознавания.',
@@ -180,9 +229,20 @@ export const translations: Record<Locale, Record<string, string>> = {
     'tray.open': 'Открыть AutoSpeechWriter',
     'tray.modeLowest': 'Режим: Минимальная задержка',
     'tray.modeBest': 'Режим: Лучшее качество',
+    'tray.modeRecord': 'Режим: Запись перед распознаванием',
     'tray.autoPaste': 'Автовставка (вставлять распознанный текст в активное приложение по мере распознавания)',
     'tray.autoStart': 'Запускать при старте',
-    'tray.exit': 'Выход'
+    'tray.exit': 'Выход',
+
+    'devices.title': 'Устройства ввода',
+    'devices.refresh': 'Обновить список устройств',
+    'devices.hint': 'Выберите одно или несколько устройств для микширования. Постучите по микрофону, чтобы увидеть, какое устройство реагирует. Настройте громкость для каждого устройства.',
+    'devices.selectedCount': 'Выбрано источников: {n}',
+    'devices.systemSound': 'Системный звук',
+    'devices.systemSoundDesc': 'Звук, воспроизводимый через динамики/наушники',
+    'devices.physicalDevices': 'Микрофоны',
+    'devices.defaultDevice': 'Системное умолчание',
+    'devices.none': 'Устройства ввода не найдены. Нажмите обновить или проверьте разрешения.'
   },
 
   // Filled in by translation pass — fall back to English until then.
@@ -190,6 +250,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'app.name': "AutoSpeechWriter",
     'header.title': "AutoSpeechWriter",
     'status.ready': "Bereit",
+    'status.processing': "Verarbeitung…",
 
     'transcript.placeholder': "Hier erscheint der erkannte Text...",
     'transcript.silence': "Stille erkannt",
@@ -222,6 +283,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'settings.performanceMode': "Leistungsmodus",
     'settings.modeLowest': "Niedrigste Latenz",
     'settings.modeBest': "Beste Korrektur / Qualität",
+    'settings.modeRecordThenRecognize': "Aufnahme vor Erkennung",
     'settings.autoStart': "Anwendung beim Systemstart ausführen",
     'settings.autoPasteHotkey': "Auto-Einfügen beim Starten der Erkennung über Hotkey",
     'settings.cancel': "Abbrechen",
@@ -246,6 +308,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'tray.open': "AutoSpeechWriter öffnen",
     'tray.modeLowest': "Leistungsmodus: Niedrigste Latenz",
     'tray.modeBest': "Leistungsmodus: Beste Qualität",
+    'tray.modeRecord': "Leistungsmodus: Aufnahme vor Erkennung",
     'tray.autoPaste': "Auto-Einfügen (erkannten Text während der Erkennung in die aktive Anwendung einfügen)",
     'tray.autoStart': "Beim Start ausführen",
     'tray.exit': "Beenden"
@@ -254,6 +317,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'app.name': "AutoSpeechWriter",
     'header.title': "AutoSpeechWriter",
     'status.ready': "Prêt",
+    'status.processing': "Traitement…",
 
     'transcript.placeholder': "Le texte reconnu apparaîtra ici...",
     'transcript.silence': "Silence détecté",
@@ -286,6 +350,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'settings.performanceMode': "Mode de performance",
     'settings.modeLowest': "Latence la plus basse",
     'settings.modeBest': "Meilleure correction / qualité",
+    'settings.modeRecordThenRecognize': "Enregistrement avant reconnaissance",
     'settings.autoStart': "Lancer l'application au démarrage du système",
     'settings.autoPasteHotkey': "Auto-collage lors du démarrage de la reconnaissance via raccourci",
     'settings.cancel': "Annuler",
@@ -310,6 +375,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'tray.open': "Ouvrir AutoSpeechWriter",
     'tray.modeLowest': "Mode de performance : Latence la plus basse",
     'tray.modeBest': "Mode de performance : Meilleure qualité",
+    'tray.modeRecord': "Mode de performance : Enregistrement avant reconnaissance",
     'tray.autoPaste': "Auto-collage (coller le texte reconnu dans l'application active au fur et à mesure de la reconnaissance)",
     'tray.autoStart': "Lancer au démarrage",
     'tray.exit': "Quitter"
@@ -318,6 +384,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'app.name': "AutoSpeechWriter",
     'header.title': "AutoSpeechWriter",
     'status.ready': "Listo",
+    'status.processing': "Procesando…",
 
     'transcript.placeholder': "El texto reconocido aparecerá aquí...",
     'transcript.silence': "Silencio detectado",
@@ -350,6 +417,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'settings.performanceMode': "Modo de rendimiento",
     'settings.modeLowest': "Latencia más baja",
     'settings.modeBest': "Mejor corrección / calidad",
+    'settings.modeRecordThenRecognize': "Grabar antes de reconocer",
     'settings.autoStart': "Ejecutar la aplicación al inicio del sistema",
     'settings.autoPasteHotkey': "Auto-pegar al iniciar el reconocimiento mediante atajo",
     'settings.cancel': "Cancelar",
@@ -374,6 +442,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'tray.open': "Abrir AutoSpeechWriter",
     'tray.modeLowest': "Modo de rendimiento: Latencia más baja",
     'tray.modeBest': "Modo de rendimiento: Mejor calidad",
+    'tray.modeRecord': "Modo de rendimiento: Grabar antes de reconocer",
     'tray.autoPaste': "Auto-pegar (pegar el texto reconocido en la aplicación activa a medida que se reconoce)",
     'tray.autoStart': "Ejecutar al inicio",
     'tray.exit': "Salir"
@@ -382,6 +451,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'app.name': "AutoSpeechWriter",
     'header.title': "AutoSpeechWriter",
     'status.ready': "Pronto",
+    'status.processing': "Elaborazione…",
 
     'transcript.placeholder': "Il testo riconosciuto apparirà qui...",
     'transcript.silence': "Silenzio rilevato",
@@ -414,6 +484,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'settings.performanceMode': "Modalità prestazioni",
     'settings.modeLowest': "Latenza più bassa",
     'settings.modeBest': "Miglior correzione / qualità",
+    'settings.modeRecordThenRecognize': "Registra prima di riconoscere",
     'settings.autoStart': "Esegui l'applicazione all'avvio del sistema",
     'settings.autoPasteHotkey': "Auto-incolla all'avvio del riconoscimento tramite scorciatoia",
     'settings.cancel': "Annulla",
@@ -438,6 +509,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'tray.open': "Apri AutoSpeechWriter",
     'tray.modeLowest': "Modalità prestazioni: Latenza più bassa",
     'tray.modeBest': "Modalità prestazioni: Qualità migliore",
+    'tray.modeRecord': "Modalità prestazioni: Registra prima di riconoscere",
     'tray.autoPaste': "Auto-incolla (incolla il testo riconosciuto nell'applicazione attiva man mano che viene riconosciuto)",
     'tray.autoStart': "Esegui all'avvio",
     'tray.exit': "Esci"
@@ -446,6 +518,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'app.name': "AutoSpeechWriter",
     'header.title': "AutoSpeechWriter",
     'status.ready': "就绪",
+    'status.processing': "处理中…",
 
     'transcript.placeholder': "识别的文本将显示在此处...",
     'transcript.silence': "检测到静音",
@@ -478,6 +551,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'settings.performanceMode': "性能模式",
     'settings.modeLowest': "最低延迟",
     'settings.modeBest': "最佳修正 / 质量",
+    'settings.modeRecordThenRecognize': "先录音后识别",
     'settings.autoStart': "在系统启动时运行应用",
     'settings.autoPasteHotkey': "通过热键启动识别时自动粘贴",
     'settings.cancel': "取消",
@@ -502,6 +576,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     'tray.open': "打开 AutoSpeechWriter",
     'tray.modeLowest': "性能模式：最低延迟",
     'tray.modeBest': "性能模式：最佳质量",
+    'tray.modeRecord': "性能模式：先录音后识别",
     'tray.autoPaste': "自动粘贴（在识别过程中将识别的文本粘贴到当前应用）",
     'tray.autoStart': "开机时运行",
     'tray.exit': "退出"
