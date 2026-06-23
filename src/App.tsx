@@ -160,6 +160,46 @@ export type AudioSource = {
   enabled: boolean;
 };
 
+// Build microphone audio constraints with ALL audio processing DISABLED.
+// CRITICAL: Chromium's defaults (echoCancellation, autoGainControl,
+// noiseSuppression) are all `true`. On Windows, `autoGainControl` uses the
+// Windows Communication API's AGC, which modifies the SYSTEM-LEVEL microphone
+// level/boost — so tapping or blowing into the mic causes Windows to
+// permanently reduce the mic level in Sound settings. By explicitly setting
+// all three to `false`, we get the raw microphone signal and never touch
+// system audio settings.
+function micAudioConstraints(deviceId: string): boolean | MediaTrackConstraints {
+  if (deviceId === 'default') {
+    return {
+      echoCancellation: false,
+      autoGainControl: false,
+      noiseSuppression: false,
+    };
+  }
+  return {
+    deviceId: { exact: deviceId },
+    echoCancellation: false,
+    autoGainControl: false,
+    noiseSuppression: false,
+  };
+}
+
+// Belt-and-suspenders: after getUserMedia returns a stream, explicitly apply
+// processing-disabled constraints to each audio track. Some Chromium versions
+// ignore the constraints passed to getUserMedia; applyConstraints on the track
+// is the authoritative way to disable AGC/echo/noise at the track level.
+function disableAudioProcessingOnStream(stream: MediaStream) {
+  for (const track of stream.getAudioTracks()) {
+    try {
+      track.applyConstraints({
+        echoCancellation: false,
+        autoGainControl: false,
+        noiseSuppression: false,
+      });
+    } catch (_) { /* not all tracks support applyConstraints */ }
+  }
+}
+
 type MixerGraph = {
   ctx: AudioContext;
   mixDest: MediaStreamAudioDestinationNode;
@@ -202,9 +242,10 @@ async function buildMixerGraph(sources: AudioSource[]): Promise<MixerGraph> {
         stream.getVideoTracks().forEach(t => t.stop());
       } else {
         const constraints: MediaStreamConstraints = {
-          audio: s.deviceId === 'default' ? true : { deviceId: { exact: s.deviceId } }
+          audio: micAudioConstraints(s.deviceId)
         };
         stream = await navigator.mediaDevices.getUserMedia(constraints);
+        disableAudioProcessingOnStream(stream);
       }
       streams.push(stream);
       const src = ctx.createMediaStreamSource(stream);
@@ -315,9 +356,10 @@ async function buildStreamingMixerGraph(sources: AudioSource[]): Promise<Streami
         stream.getVideoTracks().forEach(t => t.stop());
       } else {
         const constraints: MediaStreamConstraints = {
-          audio: s.deviceId === 'default' ? true : { deviceId: { exact: s.deviceId } }
+          audio: micAudioConstraints(s.deviceId)
         };
         stream = await navigator.mediaDevices.getUserMedia(constraints);
+        disableAudioProcessingOnStream(stream);
       }
       streams.push(stream);
       const src = ctx.createMediaStreamSource(stream);
@@ -390,7 +432,16 @@ function AudioDevicesModal({ locale, initialSources, onClose, onApply }: {
   useEffect(() => {
     (async () => {
       try {
-        const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Trigger permission so labels become available. Disable all audio
+        // processing to prevent Windows AGC from modifying system mic levels.
+        const tmp = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            autoGainControl: false,
+            noiseSuppression: false,
+          }
+        });
+        disableAudioProcessingOnStream(tmp);
         tmp.getTracks().forEach(t => t.stop());
       } catch (_) {}
       const list = await navigator.mediaDevices.enumerateDevices();
